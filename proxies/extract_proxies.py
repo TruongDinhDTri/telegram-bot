@@ -1,23 +1,21 @@
 import pandas as pd
 import json
 
-# Step 1: Read the CSV file
-df = pd.read_csv('proxy_list.csv')
 
-# Step 2: Extract the IP and Port columns
-ip_addresses = df['ip']
-ports = df['port']
+file_path = './proxies_testing.txt'
+save_path = '../ip_list.json'
+def read_proxies_from_file(file_path):
+    proxies = []
+    with open(file_path, 'r') as file:
+        for line in file:
+            proxy = line.strip()
+            if proxy: 
+                proxies.append(proxy)
+    return proxies
 
-# Step 3: Combine IP and Port into the final proxy value
-proxy_values = ip_addresses + ':' + ports.astype(str)
+def save_proxies(save_path, proxies):
+    with open(save_path, 'w') as file:
+        json.dump(proxies, file, indent = 4)
 
-# Display the result
-print(proxy_values.tolist())
-# Writing to a JSON file
-with open('ip_list.json', 'w') as json_file:
-    json.dump(proxy_values.tolist(), json_file)
-
-with open('ip_list.json', 'r') as file:
-    proxies = json.load(file)
-    
-print(proxies[0])
+proxies =read_proxies_from_file(file_path)
+save_proxies(save_path, proxies)

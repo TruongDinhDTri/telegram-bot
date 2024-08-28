@@ -9,9 +9,9 @@ import requests
 import re
 from get_ip_info import *
 from authenticate import *
-from undetected_chromedriver.options import ChromeOptions
-from undetected_chromedriver import Chrome
-from selenium_stealth import stealth
+# from undetected_chromedriver.options import ChromeOptions
+# from undetected_chromedriver import Chrome
+from seleniumbase import Driver
 
 
 
@@ -252,15 +252,9 @@ async def delete_all_links_command(update: Update, context: ContextTypes.DEFAULT
     if 'stored_links' not in users_links_added[user_id] or not users_links_added[user_id]['stored_links']:
         return await update.message.reply_text("You don't have any links to delete.")
 
-    # Stop the current monitoring if active
-    if user_id in monitoring_stop_events:
-        monitoring_stop_events[user_id].set()
-        monitoring_threads[user_id].join()
 
-        del monitoring_stop_events[user_id]
-        del monitoring_threads[user_id]
-        
-        monitoring_state[user_id] = False
+    if user_id in monitoring_state and monitoring_state[user_id]:
+        return await update.message.reply_text("Please stop monitoring first by using /off before deleting links.")
 
     # Clear all stored links
     users_links_added[user_id]['stored_links'] = []
@@ -295,6 +289,12 @@ async def delete_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         users_links_added[user_id]["monitoring_links"] = []
     
     links = users_links_added[user_id]["stored_links"]
+    
+    # Check if monitoring is active
+    if user_id in monitoring_state and monitoring_state[user_id]:
+        await update.message.reply_text("Please stop monitoring first using /off before deleting any links.")
+        return ConversationHandler.END
+    
     
     if not links:
         await update.message.reply_text("You don't have any links to delete.")
@@ -568,13 +568,9 @@ def monitor_iplogger(user_id, monitoring_links, stop_event, interval = 5):
     while not stop_event.is_set():
         for link in monitoring_links:
             code = link.rstrip('/').split('/')[-1]
-            chrome_options = ChromeOptions()
-            chrome_options.page_load_strategy = 'none'
-            chrome_options.add_argument('--headless')
-            driver = Chrome(options=chrome_options, service_args=['--verbose'])
-            print(f'Using random proxies for monitoring: {random_proxy}')
             try:
-                notes, date_time, ip_address_details = get_full_info_iplogger(driver, link, code)
+                driver = Driver(headless=True, uc=True)
+                notes, date_time, ip_address_details = get_full_info_iplogger(driver, link)
             except Exception as e:
                 print(f"An error occurred while getting full info: {e}")
             if last_data.get(code) != date_time and len(date_time) != 0:
@@ -595,9 +591,11 @@ def monitor_iplogger(user_id, monitoring_links, stop_event, interval = 5):
     print(f"Monitoring stopped for user {user_id}.")
 
 
+
+
+
 if __name__ == '__main__':
     print('Starting Bot...')
-    
     
     clear_data()
     persistence = PicklePersistence(filepath='bot_data_testing')
@@ -636,7 +634,6 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.TEXT, handle_message))
     app.add_error_handler(error)
 
-    # Start monitoring on startup
     # Run startup_monitoring asynchronously
     startup_monitoring()
 

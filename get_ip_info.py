@@ -4,13 +4,16 @@ import time
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from undetected_chromedriver.options import ChromeOptions
+# from undetected_chromedriver.options import ChromeOptions
 import certifi
 import os
-from undetected_chromedriver import Chrome
+# from undetected_chromedriver import Chrome
 from time import time, sleep
 import json
-import random
+import random   
+import traceback
+from seleniumbase import Driver
+
 
 
 IPLOGGER_LINK = 'https://iplogger.org/logger/'
@@ -19,6 +22,7 @@ os.environ['SSL_CERT_FILE'] = certifi.where()
 
 with open('ip_list.json', 'r') as file:
     proxies = json.load(file)
+
 
 
 # def get_valid_proxy(proxies: list) -> str:
@@ -71,65 +75,32 @@ random_proxy = random.choice(proxies)
 
 
 # Add cookies => not to expired cookies session anymore
-def get_iplogger_data(code, cookies):
-    # Form data
-    
-    # print('code passsing in: ', code)
-    payload = {
-        'interval': 'all',
-        'filters': '',
-        'page': '1',
-        'sort': 'created',
-        'order': 'desc',
-        'code': {code}
-    }
-    
-    headers = {
-        'accept': 'application/json, text/javascript, */*; q=0.01',
-        'accept-encoding': 'gzip, deflate, br, zstd',
-        'cookie': cookies,
-        'origin': 'https://iplogger.org',
-        'priority': 'u=1, i',
-        'referer': 'https://iplogger.org/logger/{code}/',
-        'sec-ch-ua': '"Not)A;Brand";v="99", "Google Chrome";v="127", "Chromium";v="127"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-origin',
-        'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
-        'x-requested-with': 'XMLHttpRequest'
-    }   
-
-    try:
-            # Perform the POST request
-            
-            response = requests.post(IPLOGGER_LINK, headers=headers, data=payload, proxies={'http:': random_proxy, 'https:': random_proxy})
-            response.raise_for_status()  # Raise an HTTPError for bad responses (4xx or 5xx)
-            print('Using proxies to get iplogger: ', random_proxy)
-            # Process the response
-            json_data_ips = response.json().get('content', [])
-            if not json_data_ips:
-                print("No IP data found.")
-                return [], []
-
-            # Combine the HTML content
-            converted = ''.join(json_data_ips)
-
-            # Parse the page using Beautiful Soup
-            soup = BeautifulSoup(converted, 'html.parser')
-            ip_dates = [div.text for div in soup.select('div.visitor-date div.ip-date')]
-            ip_times = [div.text for div in soup.select('div.visitor-date .ip-time')]
-            ip_address = [div.text for div in soup.select('div.visitor-ip div.ip-address')]
-            date_time = [f"{date} {time}" for date, time in zip(ip_dates, ip_times)]
-            print(date_time, ip_address)
-            return date_time, ip_address
+def get_iplogger_data(driver):
+    try:        
+        # Wait for the content to be present and visible
+        WebDriverWait(driver, 15).until(
+            EC.visibility_of_element_located((By.CSS_SELECTOR, 'div.visitor-date'))
+        )
         
-    except requests.exceptions.RequestException as e:
-            # Handle any request exceptions (e.g., connection error, timeout, HTTP error)
-            print(f"An error occurred while fetching IP logger data: {e}")
-            return [], []
+        # Get page source and parse it with BeautifulSoup
+        page_source = driver.page_source
+        soup = BeautifulSoup(page_source, 'html.parser')
+        
+        # Extract IP addresses and timestamps
+        ip_dates = [div.text for div in soup.select('div.visitor-date div.ip-date')]
+        ip_times = [div.text for div in soup.select('div.visitor-date .ip-time')]
+        ip_address = [div.text for div in soup.select('div.visitor-ip div.ip-address')]
+        date_time = [f"{date} {time}" for date, time in zip(ip_dates, ip_times)]
+        
+        print(date_time, ip_address)
+        return date_time, ip_address
+    
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return [], []
 
 # ~ Prepared to bypass the CLOUDFLARE
-def _get_with_cf_bypass(driver: Chrome ,url: str) -> None:
+def _get_with_cf_bypass(driver ,url: str) -> None:
     # open a new tab and navigate to the url
     driver.execute_script(f"window.open('{url}', '_blank');")
     # waiting CloudFlare to redirect to the real page, waiting for it to solved the captcha verify human
@@ -138,7 +109,7 @@ def _get_with_cf_bypass(driver: Chrome ,url: str) -> None:
     driver.switch_to.window(driver.window_handles[1])
     
     
-def get_custom_page_load_strategy(driver: Chrome, url: str) -> None:
+def get_custom_page_load_strategy(driver, url: str) -> None:
     _get_with_cf_bypass(driver ,url)
 
     start_time = time()
@@ -152,29 +123,28 @@ def get_custom_page_load_strategy(driver: Chrome, url: str) -> None:
 
     raise TimeoutError()
 
-def get_element_value(driver: Chrome, selector: str):
-    print("getting into")
+def get_element_value(driver, selector: str):
     try: 
-        element = WebDriverWait(driver, 10).until(
+        element = WebDriverWait(driver, 15).until(
             EC.visibility_of_element_located((By.CSS_SELECTOR, selector))
         )
-        cookies = driver.get_cookies()
-        cookie_header = '; '.join([f"{cookie['name']}={cookie['value']}" for cookie in cookies])
         notes = element.get_attribute('value') if element else 'empty'
         print("notes: ", notes)
-        return notes, cookie_header
+        return notes
     
     except Exception as e:
         print(f"An error occurred: -------------------- {e}")
+        driver.save_screenshot('screenshot_headless.png')
+        traceback.print_exc()
         return ""
     
-def get_full_info_iplogger(driver: Chrome, url: str, code):
+def get_full_info_iplogger(driver, url: str):
 
     get_custom_page_load_strategy(driver, url)
 
-    notes, cookie_header = get_element_value(driver, 'div.notes input')
+    notes = get_element_value(driver, 'div.notes input')
 
-    date_time, ip_address = get_iplogger_data(code, cookie_header)
+    date_time, ip_address = get_iplogger_data(driver)
     
         # Format date_time and ip_address for better readability
     date_time_str = ', '.join(date_time) if isinstance(date_time, list) else str(date_time)
@@ -303,9 +273,6 @@ def get_ip_info(date_time, ip_address_details):
         return None
 
 if __name__ == '__main__':
-    chrome_options = ChromeOptions()
-    chrome_options.page_load_strategy = 'none' # disable page load strategy
-    chrome_options.add_argument('--headless')  # Enable headless mode
-    driver = Chrome(options = chrome_options)
-    get_full_info_iplogger(driver, '','')
+    driver = Driver(headless=True, uc=True)
+    get_full_info_iplogger(driver, 'https://iplogger.org/logger/HmcL4Qa0wKVm/')
 

@@ -1,15 +1,21 @@
 {
-    "token": "",
-    "chat_id": "",
+    "token": "7309592513:AAEpzQRvSkQhB9taxFPoWhXYKgWAmxyTLzI",
+    "chat_id": "1700028265",
     "admin_id": "1700028265",
-    "otp_secret": "",
-    "inactive_time": 180,
+    "otp_secret": "IUVQVBQRFIURW4MJPKQQMS7SPJC7YZVN",
+    "inactive_time": 240,
     "active_users": {},
-    "inactive_user_ids": [],
+    "inactive_user_ids": [
+        "1700028265"
+    ],
     "users_links_added": {
-
+        "1700028265": {
+            "stored_links": [
+                "https://iplogger.org/logger/HmcL4Qa0wKVm/"
+            ]
+        }
     },
     "monitoring_state": {
-        
+        "1700028265": true
     }
 }
