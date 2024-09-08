@@ -13,6 +13,8 @@ import json
 import random   
 import traceback
 from seleniumbase import Driver
+import asyncio
+
 
 
 
@@ -69,7 +71,7 @@ with open('ip_list.json', 'r') as file:
 #     print(e)
 
 
-random_proxy = random.choice(proxies)
+
 
 
 
@@ -138,19 +140,20 @@ def get_element_value(driver, selector: str):
         traceback.print_exc()
         return ""
     
-def get_full_info_iplogger(driver, url: str):
+async def get_full_info_iplogger(driver, url: str):
+    # Run the blocking function in a separate thread
+    return await asyncio.to_thread(_get_full_info_iplogger, driver, url)
 
+def _get_full_info_iplogger(driver, url: str):
     get_custom_page_load_strategy(driver, url)
 
     notes = get_element_value(driver, 'div.notes input')
 
     date_time, ip_address = get_iplogger_data(driver)
     
-        # Format date_time and ip_address for better readability
+    # Format date_time and ip_address for better readability
     date_time_str = ', '.join(date_time) if isinstance(date_time, list) else str(date_time)
     ip_address_str = ', '.join(ip_address) if isinstance(ip_address, list) else str(ip_address)
-
-    driver.quit()
 
     # Print and return results
     print("Notes:", notes)
@@ -166,7 +169,8 @@ def get_full_info_iplogger(driver, url: str):
 
 
 def get_ip_info(date_time, ip_address_details):
-    # Base URL for ipinfo.io API 
+    # Base URL for ipinfo.io API
+    random_proxy = random.choice(proxies) 
     ip_address = ip_address_details[0]
     print('IP address: ', ip_address)
     url = f"https://ipinfo.io/widget/demo/{ip_address}"
@@ -274,5 +278,5 @@ def get_ip_info(date_time, ip_address_details):
 
 if __name__ == '__main__':
     driver = Driver(headless=True, uc=True)
-    get_full_info_iplogger(driver, 'https://iplogger.org/logger/HmcL4Qa0wKVm/')
+    get_full_info_iplogger(driver, '')
 

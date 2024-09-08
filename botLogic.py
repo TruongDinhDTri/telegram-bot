@@ -28,6 +28,7 @@ CHOSEN_LINK_ALREADY = False
 ADD_LINK_ALREADY = False
 monitoring_threads = {}
 monitoring_stop_events = {}
+monitoring_tasks = {}
 
 '''
 ....................................................................................................
@@ -110,14 +111,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Hello! Here are the available commands: \n"
                                     "/start - start the bot \n"
-                                    "/addlinks - Add new links to monitoring \n"
                                     "/help - Show this help message\n"
-                                    "/monitorlinks - Monitor stored links\n"
-                                    "/view - View stored and monitoring links\n"
-                                    "/deletelink - Delete specific links\n"
-                                    "/deleteall - Delete all links\n"
                                     "/authenticate [OTP] - to authenticate your credentials\n"
-                                    "/info - to show info for your personal account\n")
+                                    "/add - Add new links to monitoring. Syntax: /add [your_link] \n"
+                                    "/on - Start monitor links. Syntaxt: /on [link_number]\n"
+                                    "/off - Stop monitor links\n"
+                                    "/view - View all your links\n"
+                                    "/delete - Delete specific links. Syntaxt: /delete [link_number]\n"
+                                    "/deleteall - Delete all links\n"
+                                    "/info - Show your personal info\n"
+                                    # "/users - Show all active users [admin only]\n"
+                                    # "/logout [user_id] - Log out a users [admin only]\n"
+                                    # "/logoutall - Log out all users [admin only]\n"
+                                    )
     
 
 
@@ -157,6 +163,8 @@ async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # * 🌅 ADDLinks Command
 async def addlinks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
+    args = context.args  # Get command arguments
+    
     # ~ User first time come in they neither in the active_users or in inactive_users
     if is_new_user(user_id): 
         await update.message.reply_text("Please authenticate using /authenticate [OTP]")
@@ -165,41 +173,32 @@ async def addlinks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif not is_authenticated(user_id):
         await update.message.reply_text("Your session expired! Please use /start to begin or /authenticate to log in again.")
         return
-    else:
-        await update.message.reply_text("Please paste you link");
-        return ADD_LINKS
-
-# ~ 🐥 STORE LINK HANDLE ADDLINKS
-async def handle_addlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.message.from_user.id)
-    link = update.message.text.strip()
-
+    # Check if an argument was provided
+    if len(args) != 1:
+        return await update.message.reply_text("Please provide a single valid link. Usage: /add [link]")
+    
+    link = args[0].strip()
+    
     valid_url_pattern = re.compile(r'^https://iplogger\.org/logger/[a-zA-Z0-9]*/?')
-
+    
     try:
         if user_id not in users_links_added:
-            print('ADD LINKS: USER NOT IN ADD LINKS: ')
-            users_links_added[user_id] = {}
-            users_links_added[user_id]["stored_links"] = []
-            users_links_added[user_id]["monitoring_links"] = []
+            users_links_added[user_id] = {
+                "stored_links": [],
+                "monitoring_links": []
+            }
+        
         if link in users_links_added[user_id]["stored_links"]:
-            print('link already in')
-            await update.message.reply_text('Link already in the database, thanks')
-            return ConversationHandler.END
+            return await update.message.reply_text("Link already in the database, thanks.")
+    
         if valid_url_pattern.match(link):
-            print('add links here')
             users_links_added[user_id]["stored_links"].append(link)
-            await update.message.reply_text(f'New link {link} added, If you want to add another link, use /addlinks again.')
             save_data()
-            return ConversationHandler.END
-        else: 
-            await update.message.reply_text("Invalid link! Please provide a link in the format https://iplogger.org/logger/xxxxxx. Please /addlinks again")
-            return ConversationHandler.END
+            return await update.message.reply_text(f'New link {link} added. If you want to add another link, use /add [link] again.')
+        else:
+            return await update.message.reply_text("Invalid link! Please provide a valid link in the format https://iplogger.org/logger/xxxxxx. Use /add [link]")
     except Exception as e:
-        await update.message.reply_text(f"Something went wrong! Failed to add link: {str(e)}. Please try again.")
-        return ConversationHandler.END
-
-
+        return await update.message.reply_text(f"Something went wrong! Failed to add link: {str(e)}. Please try again.")
 
 
 # * 🌅 VIEWS Command
@@ -267,13 +266,9 @@ async def delete_all_links_command(update: Update, context: ContextTypes.DEFAULT
     
 
 
-        
-
-
-# ~ If delete from 'links': delete in links will also be delete from 'monitoring_links"
-# ~ If delete from 'monitoring_links': delete only in the 'monitoring_links'
 async def delete_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
+    args = context.args  # Get command arguments
     
     if is_new_user(user_id): 
         await update.message.reply_text("Please authenticate using /authenticate [OTP]")
@@ -293,73 +288,36 @@ async def delete_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check if monitoring is active
     if user_id in monitoring_state and monitoring_state[user_id]:
         await update.message.reply_text("Please stop monitoring first using /off before deleting any links.")
-        return ConversationHandler.END
+        return
     
     
     if not links:
         await update.message.reply_text("You don't have any links to delete.")
-        return ConversationHandler.END
+        return
     
-    await update.message.reply_text(
-        "Here are your links: \n" + 
-        "\n".join([f"{i+1} 🪩 {item}" for i, item in enumerate(links)]) + 
-        "\n\nPlease choose the number of the link you want to delete, or type 'cancel' to exit."
-    )
-    
-    return DELETE_SPECIFIC_LINK
-
-
-async def delete_link_by_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.message.from_user.id)
-    text = update.message.text.strip()
-    
-    if text.lower() == 'cancel':
-        await update.message.reply_text("Link deletion cancelled.")
-        return ConversationHandler.END
+        # Check if an argument was provided
+    if len(args) != 1:
+        await update.message.reply_text("Please provide a single number to delete. Usage: /delete [number]")
+        return
     
     try:
-        link_number = int(text) - 1  # Convert to zero-based index
-        links = users_links_added[user_id]["stored_links"]
+        link_number = int(args[0]) - 1  # Convert to zero-based index
 
         if 0 <= link_number < len(links):
             deleted_link = links.pop(link_number)  # Remove the link from 'links'
-            await update.message.reply_text(f"Link deleted: {deleted_link}")
-            save_data()
-
-            # Stop the current monitoring
-            if user_id in monitoring_stop_events:
-                monitoring_stop_events[user_id].set()
-                monitoring_threads[user_id].join()
-
-                del monitoring_stop_events[user_id]
-                del monitoring_threads[user_id]
-                save_data()
-                
-            await update.message.reply_text("Link deletion successful")
-
-            # Re-monitor if there are still links and monitoring is active
-            if links and monitoring_state.get(user_id, False):
-                await update.message.reply_text("Re-starting monitoring for remaining links.")
             
-                
-                stop_event = threading.Event()
-                monitoring_stop_events[user_id] = stop_event
-                monitoring_threads[user_id] = threading.Thread(target=monitor_iplogger, args=(user_id, users_links_added[user_id]['stored_links'], stop_event, 5),)
-                
-                
-                monitoring_threads[user_id].start()
-                monitoring_state[user_id] = True
-                save_data()
-            return ConversationHandler.END
+            # Also remove the link from 'monitoring_links' if it exists there
+            if deleted_link in users_links_added[user_id]["monitoring_links"]:
+                users_links_added[user_id]["monitoring_links"].remove(deleted_link)
+
+            save_data()
+            return await update.message.reply_text(f"Link deleted: {deleted_link}")
         else:
             await update.message.reply_text("Invalid link number. Please try again.")
-            return DELETE_SPECIFIC_LINK
-    
+            return
     except ValueError:
         await update.message.reply_text("Please enter a valid number.")
-        return DELETE_SPECIFIC_LINK
-
-
+        return
 
 
 
@@ -376,27 +334,46 @@ async def on_monitor_command(update:Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Ensure that the user data exists and is initialized    
     if user_id not in users_links_added or 'stored_links' not in users_links_added[user_id] or len(users_links_added[user_id]['stored_links']) == 0:
-        users_links_added[user_id] = {}
-        users_links_added[user_id]["stored_links"] = []
+        users_links_added[user_id] = {"stored_links": [], "monitoring_links": []}
         return await update.message.reply_text("You have no links stored. Please add some links first.")
+    
+    try:
+        index = int(context.args[0]) - 1
+    except (IndexError, ValueError):
+        return await update.message.reply_text("Please provide a valid link index (e.g., /on 1).")
+
+    if index < 0 or index >= len(users_links_added[user_id]['stored_links']):
+        return await update.message.reply_text("Index out of range. Please provide a valid index.")
+
+    link = users_links_added[user_id]["stored_links"][index]
+    
+    
+    if user_id not in monitoring_tasks:
+        monitoring_tasks[user_id] = {}
+        
+    if link in monitoring_tasks[user_id]:
+        return await update.message.reply_text(f"Already monitoring link: {link}")
+    
+    async def start_monitoring():
+        while True:
+            await monitor_iplogger(user_id, link, interval=5)
+    
+    task = asyncio.create_task(start_monitoring())
+    monitoring_tasks[user_id][link] = task
+    
+    if link not in users_links_added[user_id]["monitoring_links"]:
+        users_links_added[user_id]["monitoring_links"].append(link)
+    
     
     formatted_items = [f'Link {i + 1}: {item}' for i, item in enumerate(users_links_added[user_id]['stored_links'])]
     response = '\n'.join(formatted_items)
-    
-    stop_event = threading.Event()
-    monitoring_stop_events[user_id] = stop_event
-    
-    
-    monitor_thread = threading.Thread(target=monitor_iplogger, args=(user_id, users_links_added[user_id]['stored_links'], stop_event, 5), daemon=True)
-    monitoring_threads[user_id] = monitor_thread
-    monitor_thread.start()
-    
-    
+
+
     monitoring_state[user_id] = True
     save_data()
 
-    
-    return await update.message.reply_text(f'Here are the monitoring links:\n{response}\n')
+    return await update.message.reply_text(f'Started monitoring link {index + 1}: {link}\n\nAll stored links:\n{response}')
+
 
 async def off_monitor_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
@@ -409,19 +386,26 @@ async def off_monitor_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("Your session expired! Please use /start to begin or /authenticate to log in again.")
         return
 
-    if user_id in monitoring_stop_events:
-        monitoring_stop_events[user_id].set()
-        monitoring_threads[user_id].join()
 
-        del monitoring_stop_events[user_id]
-        del monitoring_threads[user_id]
+    tasks = monitoring_tasks[user_id].values()
+    
+    for task in tasks:
+        task.cancel()
         
-        monitoring_state[user_id] = False
-        save_data()
+    # Wait for tasks to properly cancel
+    done, pending = await asyncio.wait(tasks, timeout=3, return_when=asyncio.ALL_COMPLETED)
+    
+    
+    for task in pending:
+        task.cancel()
+    
+    # Clear the user's monitoring tasks
+    del monitoring_tasks[user_id]
+    users_links_added[user_id]["monitoring_links"] = []
+    monitoring_state[user_id] = False
+    save_data()
 
-        return await update.message.reply_text("Monitoring stopped successfully.")
-    else:
-        return await update.message.reply_text("No active monitoring session found.")
+    return await update.message.reply_text("Monitoring stopped successfully.")
     
     
     
@@ -430,16 +414,15 @@ def startup_monitoring():
     print("Restarting monitoring for users...")
     for user_id, state in monitoring_state.items():
         if state:
-            stop_event = threading.Event()
-            monitoring_stop_events[user_id] = stop_event
-            
-            monitor_thread = threading.Thread(
-                target=monitor_iplogger,
-                args=(user_id, users_links_added[user_id]['stored_links'], stop_event, 5),
-                daemon=True
-            )
-            monitoring_threads[user_id] = monitor_thread
-            monitor_thread.start()
+            # Ensure user has monitoring links
+            if user_id in users_links_added and 'monitoring_links' in users_links_added[user_id]:
+                links = users_links_added[user_id]['monitoring_links']
+                
+                # Create a task for each link
+                for link in links:
+                    if link not in monitoring_tasks.get(user_id, {}):
+                        task = asyncio.create_task(monitor_iplogger(user_id, link, interval=5))
+                        monitoring_tasks.setdefault(user_id, {})[link] = task
 
     save_data()
 
@@ -563,33 +546,39 @@ def auto_sent_message(token, user_id, message):
         return f'Failed to sent the message with Exception: {e}'
     
     
-def monitor_iplogger(user_id, monitoring_links, stop_event, interval = 5):
+async def monitor_iplogger(user_id, link, interval=5):
     last_data = {}
-    while not stop_event.is_set():
-        for link in monitoring_links:
-            code = link.rstrip('/').split('/')[-1]
-            try:
-                driver = Driver(headless=True, uc=True)
-                notes, date_time, ip_address_details = get_full_info_iplogger(driver, link)
-            except Exception as e:
-                print(f"An error occurred while getting full info: {e}")
-            if last_data.get(code) != date_time and len(date_time) != 0:
-                    print('dateTime: ', date_time)
-                    print('time: ', last_data.get(code) )
-                    print(f'------------------------\nMonitoring {link}')
-                    print("New data detected!")
-                    combined_info_string = get_ip_info(date_time, ip_address_details)
-                    auto_sent_message(TOKEN, user_id,
+    
+    while True:
+        code = link.rstrip('/').split('/')[-1]
+        try:
+            driver = Driver(headless=True, uc=True)
+            notes, date_time, ip_address_details = await get_full_info_iplogger(driver, link)
+            driver.quit()
+        except Exception as e:
+            print(f"An error occurred while getting full info: {e}")
+            # Optionally, add a delay before retrying
+            await asyncio.sleep(interval)
+            continue
+        
+        if last_data.get(code) != date_time and len(date_time) != 0:
+            print('dateTime: ', date_time)
+            print('time: ', last_data.get(code))
+            print(f'------------------------\nMonitoring {link}')
+            print("New data detected!")
+            combined_info_string = get_ip_info(date_time, ip_address_details)
+            await asyncio.to_thread(auto_sent_message, TOKEN, user_id,
                                     f'\nNOTES: {notes}\n'+
                                     f'\nLink URL: {link} \n' +
                                     combined_info_string)
-                    last_data[code] = date_time
-            else:
-                print(f"No new data for {link}..................")
-                print(last_data)
-        time.sleep(interval)
-    print(f"Monitoring stopped for user {user_id}.")
-
+            last_data[code] = date_time
+        else:
+            print(f"No new data for {link}..................")
+            print(last_data)
+        
+        print('going to sleep now')
+        await asyncio.sleep(interval)
+        print('Done sleeping')
 
 
 
@@ -606,6 +595,8 @@ if __name__ == '__main__':
     # Add handlers
     app.add_handler(CommandHandler('start', start_command))
     app.add_handler(CommandHandler('help', help_command))
+    app.add_handler(CommandHandler('add', addlinks_command))
+    app.add_handler(CommandHandler('delete', delete_link))
     app.add_handler(CommandHandler('deleteall', delete_all_links_command))
     app.add_handler(CommandHandler('authenticate', authenticate_command))
     app.add_handler(CommandHandler('info', info_command))
@@ -615,27 +606,11 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('logout', logout_command))
     app.add_handler(CommandHandler('on', on_monitor_command))
     app.add_handler(CommandHandler('off', off_monitor_command))
-
-    # Add conversation handlers
-    addlinks_handler = ConversationHandler(
-        entry_points=[CommandHandler('add', addlinks_command)],
-        states={ADD_LINKS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_addlinks)]},
-        fallbacks=[]
-    )
-    app.add_handler(addlinks_handler)
-
-    delete_links_handler = ConversationHandler(
-        entry_points=[CommandHandler('delete', delete_link)],
-        states={DELETE_SPECIFIC_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_link_by_number)]},
-        fallbacks=[]
-    )
-    app.add_handler(delete_links_handler)
-
     app.add_handler(MessageHandler(filters.TEXT, handle_message))
     app.add_error_handler(error)
 
     # Run startup_monitoring asynchronously
-    startup_monitoring()
+    # startup_monitoring()
 
     # Start polling
     print('Polling...')
