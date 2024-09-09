@@ -1,18 +1,19 @@
 {
     "token": "",
     "chat_id": "",
-    "admin_id": "",
+    "admin_id": [
+        ""
+    ],
     "otp_secret": "",
     "inactive_time": 240,
-    "active_users": {
-
-    },
+    "active_users": {},
     "inactive_user_ids": [
         ""
     ],
     "users_links_added": {
+
     },
     "monitoring_state": {
-        "1700028265": true
+
     }
 }

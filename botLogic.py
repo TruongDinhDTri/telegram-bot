@@ -3,7 +3,7 @@ import time
 import telegram
 import threading
 from datetime import datetime
-from telegram import Update
+from telegram import Update, Bot, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackContext, ConversationHandler, PicklePersistence
 import requests
 import re
@@ -15,19 +15,41 @@ from seleniumbase import Driver
 
 
 
-TOKEN: Final = data['token']  # token of your bot
-CHAT_ID: Final = data['chat_id']  # your bot chat id
-ADD_LINKS = 1
-MONITORING_LINKS = 1
-CHOOSE_DELETE_ALL_LIST = 1
-CHOOSE_DELETE_LIST, DELETE_SPECIFIC_LINK = range(2)
-VIEW_LINK = 1
+with open('general_data.json', 'r') as json_file: 
+    data = json.load(json_file)
 
-# Flags to track state
-CHOSEN_LINK_ALREADY = False
-ADD_LINK_ALREADY = False
-monitoring_threads = {}
-monitoring_stop_events = {}
+TOKEN = data['token']  # token of your bot
+CHAT_ID = data['chat_id']  # your bot chat id
+otp_secret = data['otp_secret']  # Google Authenticator secret key
+active_users = data['active_users']
+inactive_user_ids = set(data['inactive_user_ids'])
+users_links_added = data["users_links_added"]
+inactive_time = data['inactive_time']
+admin_ids = data['admin_id']
+monitoring_state = data['monitoring_state']
+
+
+
+# Function to save active_users back to the JSON file
+def save_data():
+    with open('general_data.json', 'w') as json_file:
+        data['active_users'] = active_users  # Update active_users in the data dictionary
+        data['inactive_user_ids'] = list(inactive_user_ids)
+        data['users_links_added'] = users_links_added
+        data['monitoring_state'] = monitoring_state
+        json.dump(data, json_file, indent=4)  # Save the updated data
+        
+# Function to clear active_users and update JSON
+def clear_data():
+    global active_users  # Declare it as a global variable
+    active_users.clear()  # Clear the active_users dictionary
+    data['active_users'] = {}  # Clear active_users in the data dictionary as well
+    with open('general_data.json', 'w') as json_file:
+        json.dump(data, json_file, indent=4) 
+
+VIEW_LINK = 1
+# Global variable to hold the application instance
+app = None
 monitoring_tasks = {}
 
 '''
@@ -90,89 +112,45 @@ monitoring_tasks = {}
 #* 🌅 START Command
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
-    user_name = update.message.from_user.username  # Get the username
-    
-    if user_id in active_users:
-        await update.message.reply_text(f"Hi! {user_name} You're already authenticated. Enjoy our service!")
+    user_name = update.message.from_user.username
+
+    if user_id not in admin_ids:
+        return await update.message.reply_text('You do not have permission to use this command')
     else:
-        await update.message.reply_text("Please authenticate using /authenticate [OTP]")
+        return await update.message.reply_text(f"Welcome! {user_name} ✋🏻, User /help to see the instructions")
     
     
 # * 🌅 HELP Command
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
-    if is_new_user(user_id): 
-        await update.message.reply_text("Please authenticate using /authenticate [OTP]")
-        return 
-    # ~ User not in active_users but IN inactive_users => They're expired
-    elif not is_authenticated(user_id):
-        await update.message.reply_text("Your session expired! Please use /start to begin or /authenticate to log in again.")
-        return
+    
+    if user_id not in admin_ids:
+        return await update.message.reply_text('You do not have permission to use this command')
     else:
-        await update.message.reply_text("Hello! Here are the available commands: \n"
+        return await update.message.reply_text("Hello! Here are the available commands: \n"
                                     "/start - start the bot \n"
                                     "/help - Show this help message\n"
-                                    "/authenticate [OTP] - to authenticate your credentials\n"
+                                    "/ipinfo [ip] - get more information about IP\n"
                                     "/add - Add new links to monitoring. Syntax: /add [your_link] \n"
                                     "/on - Start monitor links. Syntaxt: /on [link_number]\n"
                                     "/off - Stop monitor links\n"
                                     "/view - View all your links\n"
                                     "/delete - Delete specific links. Syntaxt: /delete [link_number]\n"
                                     "/deleteall - Delete all links\n"
-                                    "/info - Show your personal info\n"
-                                    # "/users - Show all active users [admin only]\n"
-                                    # "/logout [user_id] - Log out a users [admin only]\n"
-                                    # "/logoutall - Log out all users [admin only]\n"
+                                    "/users - Show all active users [admin only]\n"
+                                    "/logout [user_id] - Log out a users [admin only]\n"
+                                    "/logoutall - Log out all users [admin only]\n"
                                     )
-    
-
-
-
-async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.message.from_user.id)
-    user_name = update.message.from_user.username  # Get the username
-    
-    if is_new_user(user_id): 
-        await update.message.reply_text("Please authenticate using /authenticate [OTP]")
-        return 
-    elif not is_authenticated(user_id):
-        await update.message.reply_text("Your session expired! Please use /start to begin or /authenticate to log in again.")
-        return
-    
-    if user_id in active_users:
-        time_left = active_users[user_id]['expired_time'] - time.time()
-        logged_time = int(active_users[user_id]['logged_time'])
-        # Call the nested helper function to calculate the time
-        dt_object = datetime.fromtimestamp(logged_time)
-        formatted_date_time = dt_object.strftime("%d/%m/%Y %H:%M:%S %p")
-        def calculate_time_left(time_seconds):
-            hours = int(time_seconds // 3600)
-            minutes = int((time_seconds % 3600) // 60)
-            seconds = int(time_seconds % 60)
-            return f"{hours} hours, {minutes} minutes, {seconds} seconds"
-        time_formatted = calculate_time_left(time_left)
-        await update.message.reply_text(f"👤 User {user_name}\n"
-                                        "\n"
-                                        f"\n Logged Time {formatted_date_time}"
-                                        "\n"
-                                        f"Time left: {time_formatted}")
-
-    
-    
     
 # * 🌅 ADDLinks Command
 async def addlinks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
     args = context.args  # Get command arguments
     
-    # ~ User first time come in they neither in the active_users or in inactive_users
-    if is_new_user(user_id): 
-        await update.message.reply_text("Please authenticate using /authenticate [OTP]")
-        return 
-    # ~ User not in active_users but IN inactive_users => They're expired
-    elif not is_authenticated(user_id):
-        await update.message.reply_text("Your session expired! Please use /start to begin or /authenticate to log in again.")
-        return
+
+    if user_id not in admin_ids:
+        return await update.message.reply_text('You do not have permission to use this command')
+    
     # Check if an argument was provided
     if len(args) != 1:
         return await update.message.reply_text("Please provide a single valid link. Usage: /add [link]")
@@ -205,14 +183,10 @@ async def addlinks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def view_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
     response = ''
-    # ~ User first time come in they neither in the active_users or in inactive_users
-    if is_new_user(user_id): 
-        await update.message.reply_text("Please authenticate using /authenticate [OTP]")
-        return 
-    # ~ User not in active_users but IN inactive_users => They're expired
-    elif not is_authenticated(user_id):
-        await update.message.reply_text("Your session expired! Please use /start to begin or /authenticate to log in again.")
-        return    
+    
+    if user_id not in admin_ids:
+        return await update.message.reply_text('You do not have permission to use this command')  
+    
     else: 
         if user_id not in users_links_added:
             users_links_added[user_id] = {}
@@ -234,14 +208,8 @@ async def view_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def delete_all_links_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
 
-    # Check if the user is new or has an expired session
-    if is_new_user(user_id): 
-        await update.message.reply_text("Please authenticate using /authenticate [OTP]")
-        return 
-    
-    if not is_authenticated(user_id):
-        await update.message.reply_text("Your session expired! Please use /start to begin or /authenticate to log in again.")
-        return
+    if user_id not in admin_ids:
+        return await update.message.reply_text('You do not have permission to use this command') 
     
     # Ensure user data is initialized
     if user_id not in users_links_added:
@@ -270,13 +238,8 @@ async def delete_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
     args = context.args  # Get command arguments
     
-    if is_new_user(user_id): 
-        await update.message.reply_text("Please authenticate using /authenticate [OTP]")
-        return 
-    # ~ User not in active_users but IN inactive_users => They're expired
-    elif not is_authenticated(user_id):
-        await update.message.reply_text("Your session expired! Please use /start to begin or /authenticate to log in again.")
-        return
+    if user_id not in admin_ids:
+        return await update.message.reply_text('You do not have permission to use this command') 
     
     if user_id not in users_links_added:
         users_links_added[user_id] = {}
@@ -324,13 +287,8 @@ async def delete_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_monitor_command(update:Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
 
-    if is_new_user(user_id): 
-        await update.message.reply_text("Please authenticate using /authenticate [OTP]")
-        return 
-    # ~ User not in active_users but IN inactive_users => They're expired
-    elif not is_authenticated(user_id):
-        await update.message.reply_text("Your session expired! Please use /start to begin or /authenticate to log in again.")
-        return
+    if user_id not in admin_ids:
+        return await update.message.reply_text('You do not have permission to use this command') 
     
     # Ensure that the user data exists and is initialized    
     if user_id not in users_links_added or 'stored_links' not in users_links_added[user_id] or len(users_links_added[user_id]['stored_links']) == 0:
@@ -378,13 +336,8 @@ async def on_monitor_command(update:Update, context: ContextTypes.DEFAULT_TYPE):
 async def off_monitor_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
     
-    if is_new_user(user_id): 
-        await update.message.reply_text("Please authenticate using /authenticate [OTP]")
-        return 
-    # ~ User not in active_users but IN inactive_users => They're expired
-    elif not is_authenticated(user_id):
-        await update.message.reply_text("Your session expired! Please use /start to begin or /authenticate to log in again.")
-        return
+    if user_id not in admin_ids:
+        return await update.message.reply_text('You do not have permission to use this command') 
 
 
     tasks = monitoring_tasks[user_id].values()
@@ -430,9 +383,8 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
 
     # Check if the user is the admin
-    if user_id != admin_id:
-        await update.message.reply_text("You do not have permission to use this command.")
-        return
+    if user_id not in admin_ids:
+        return await update.message.reply_text('You do not have permission to use this command') 
 
     response = ''
     print('active user: ', active_users)
@@ -455,10 +407,8 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
 
-    # Check if the user is the admin
-    if user_id != admin_id:
-        await update.message.reply_text("You do not have permission to use this command.")
-        return
+    if user_id not in admin_ids:
+        return await update.message.reply_text('You do not have permission to use this command') 
 
     # Check if exactly one user ID is provided
     if len(context.args) != 1:
@@ -487,17 +437,36 @@ async def logoutall_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
 
     # Check if the user is the admin
-    if user_id != admin_id:
-        await update.message.reply_text("You do not have permission to use this command.")
-        return
+    if user_id not in admin_ids:
+        return await update.message.reply_text('You do not have permission to use this command') 
     if not active_users:
         await update.message.reply_text('There\'s no user online at the moment to logout')
         return 
 
     clear_data()  # This function should clear the active_users
     await update.message.reply_text('\nLogout all users completed\n')
-
     
+    
+async def ipinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.message.from_user.id)
+    args = context.args  # Get command arguments
+    
+    print('Processing IP info command')
+    print('Arguments length: ', len(args))
+    
+    if len(args) != 1:
+        await update.message.reply_text("Please provide a single number to delete. Usage: /ipinfo [ip]")
+        return
+    
+    ip_address = args[0]
+    print('IP address provided: ', ip_address)
+    
+    status_code, result = get_ip_info(str(args[0]))
+
+    if status_code == 400:
+        return await update.message.reply_text('You have enter an invalid IP address, please try again')
+    if status_code == 200:
+        return await asyncio.to_thread(auto_sent_message, TOKEN, user_id, result)
 
 
 
@@ -523,8 +492,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     
 async def error(update: Update, context:ContextTypes.DEFAULT_TYPE):
-    print(f'Update {update} caused an error {context.error}')
+    # If the error is related to connection issues, restart the bot
+    if isinstance(context.error, (ConnectionError, TimeoutError)):
+        print("Connection error detected. Restarting bot...")
+        await restart_bot()
+    else:
+        print("Unhandled error. No action taken.")
+
+async def restart_bot():
+    global app
+    # Stop the bot
+    app.stop()
     
+    # Restart logic
+    print("Restarting the bot...")
+    await asyncio.sleep(5)  # Wait a few seconds before restarting
+    main()
 
 
 # ! 🌅 AUTOSENT MESSAGE Command
@@ -553,7 +536,8 @@ async def monitor_iplogger(user_id, link, interval=5):
         code = link.rstrip('/').split('/')[-1]
         try:
             driver = Driver(headless=True, uc=True)
-            notes, date_time, ip_address_details = await get_full_info_iplogger(driver, link)
+            print('link: ', link)
+            notes, date_time, _ , combine_info_iplogger = await get_full_info_iplogger(driver, link)
             driver.quit()
         except Exception as e:
             print(f"An error occurred while getting full info: {e}")
@@ -566,11 +550,10 @@ async def monitor_iplogger(user_id, link, interval=5):
             print('time: ', last_data.get(code))
             print(f'------------------------\nMonitoring {link}')
             print("New data detected!")
-            combined_info_string = get_ip_info(date_time, ip_address_details)
             await asyncio.to_thread(auto_sent_message, TOKEN, user_id,
                                     f'\nNOTES: {notes}\n'+
                                     f'\nLink URL: {link} \n' +
-                                    combined_info_string)
+                                    combine_info_iplogger)
             last_data[code] = date_time
         else:
             print(f"No new data for {link}..................")
@@ -581,11 +564,27 @@ async def monitor_iplogger(user_id, link, interval=5):
         print('Done sleeping')
 
 
+async def set_commands(bot):
+    commands = [
+        BotCommand("start", "Start the bot"),
+        BotCommand("help", "Get help"),
+        BotCommand("add", "Add a new link"),
+        BotCommand("delete", "Delete a link"),
+        BotCommand("deleteall", "Delete all links"),
+        BotCommand("ipinfo", "Get more detail about the ip information"),
+        BotCommand("info", "Get information"),
+        BotCommand("view", "View stored links"),
+        BotCommand("users", "View users"),
+        BotCommand("logoutall", "Logout all users"),
+        BotCommand("logout", "Logout"),
+        BotCommand("on", "Start monitoring a link"),
+        BotCommand("off", "Stop monitoring")
+    ]
+    await bot.set_my_commands(commands)
 
-
-if __name__ == '__main__':
+def main():
     print('Starting Bot...')
-    
+    global app
     clear_data()
     persistence = PicklePersistence(filepath='bot_data_testing')
     
@@ -598,8 +597,7 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('add', addlinks_command))
     app.add_handler(CommandHandler('delete', delete_link))
     app.add_handler(CommandHandler('deleteall', delete_all_links_command))
-    app.add_handler(CommandHandler('authenticate', authenticate_command))
-    app.add_handler(CommandHandler('info', info_command))
+    app.add_handler(CommandHandler('ipinfo', ipinfo_command))
     app.add_handler(CommandHandler('view', view_command))
     app.add_handler(CommandHandler('users', users_command))
     app.add_handler(CommandHandler('logoutall', logoutall_command))
@@ -609,6 +607,11 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.TEXT, handle_message))
     app.add_error_handler(error)
 
+    # Set commands
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(set_commands(app.bot))
+
     # Run startup_monitoring asynchronously
     # startup_monitoring()
 
@@ -616,8 +619,6 @@ if __name__ == '__main__':
     print('Polling...')
     app.run_polling(poll_interval=4)
 
+if __name__ == '__main__':
+    main()
 
-
-
-
-    

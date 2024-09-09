@@ -4,80 +4,28 @@ import time
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-# from undetected_chromedriver.options import ChromeOptions
 import certifi
 import os
-# from undetected_chromedriver import Chrome
+from concurrent.futures import ThreadPoolExecutor
 from time import time, sleep
 import json
 import random   
-import traceback
 from seleniumbase import Driver
 import asyncio
-
+from selenium.common.exceptions import TimeoutException
 
 
 
 IPLOGGER_LINK = 'https://iplogger.org/logger/'
 os.environ['SSL_CERT_FILE'] = certifi.where()
-
+invalid_ip = False
 
 with open('ip_list.json', 'r') as file:
     proxies = json.load(file)
 
-
-
-# def get_valid_proxy(proxies: list) -> str:
-#     """Select a valid proxy from the list."""
-#     if not proxies:
-#         raise ValueError("Proxy list is empty.")
-    
-#     while proxies:
-#         random.shuffle(proxies)
-#         proxy = random.choice(proxies)  # Pick a random proxy
-#         if is_proxy_valid(proxy):
-#             return proxy
-        
-#         proxies.remove(proxy)  # Remove invalid proxy
-        
-#         if not proxies:
-#             break  # Exit if no proxies are left to check
-    
-#     raise ValueError("No valid proxies found.")
-
-# def is_proxy_valid(proxy: str) -> bool:
-#     """Check if the proxy is valid."""
-#     try:
-#         # Define a test URL (this should be something lightweight and reliable)
-#         test_url = 'https://httpbin.org/ip'
-        
-#         # Define the proxy configuration for requests
-#         proxy_dict = {
-#             'http': f"http://{proxy}",
-#             'https': f"https://{proxy}",
-#         }
-        
-#         response = requests.get(test_url, proxies=proxy_dict, timeout=5)
-#         # If the request is successful and the status code is 200, consider the proxy valid
-#         return response.status_code == 200
-#     except requests.RequestException:
-#         return False
-
-
-# try:
-#     random_proxy = get_valid_proxy(proxies)
-#     print(f"Selected valid proxy: {random_proxy}")
-# except ValueError as e:
-#     print(e)
-
-
-
-
-
-
-
 # Add cookies => not to expired cookies session anymore
 def get_iplogger_data(driver):
+    combine_info_iplogger = ''
     try:        
         # Wait for the content to be present and visible
         WebDriverWait(driver, 15).until(
@@ -92,13 +40,37 @@ def get_iplogger_data(driver):
         ip_dates = [div.text for div in soup.select('div.visitor-date div.ip-date')]
         ip_times = [div.text for div in soup.select('div.visitor-date .ip-time')]
         ip_address = [div.text for div in soup.select('div.visitor-ip div.ip-address')]
+        ip_IPS = [div.text for div in soup.select('div.visitor-ip div.ip-text')]
+        device = [div.text for div in soup.select('div.visitor-device div.platform')]
+        user_agent = [div.text for div in soup.select('div.visitor-usergent div')]
         date_time = [f"{date} {time}" for date, time in zip(ip_dates, ip_times)]
         
+        if not ip_address:
+            ip_address = ["N/A"]
+        if not ip_IPS:
+            ip_IPS = ["N/A"]
+        if not device:
+            device = ["N/A"]
+        if not user_agent:
+            user_agent = ["N/A"]
+        if not date_time:
+            date_time = ["N/A"]
+        
+
+        combine_info_iplogger = (
+            f"IP Address: {ip_address[0]}\n"
+            f"Date and Time: {date_time[0]}\n"
+            f"IP Provider: {ip_IPS[0]}"
+            f"Victim Device: {device[0]}"
+            f"User-Agent: {user_agent[0]}"
+            f"Date-Time: {date_time[0]}"
+        )
+        
         print(date_time, ip_address)
-        return date_time, ip_address
+        return date_time, ip_address, combine_info_iplogger
     
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(f"An error occurred while getting iplogger data: {e}")
         return [], []
 
 # ~ Prepared to bypass the CLOUDFLARE
@@ -125,20 +97,53 @@ def get_custom_page_load_strategy(driver, url: str) -> None:
 
     raise TimeoutError()
 
-def get_element_value(driver, selector: str):
-    try: 
-        element = WebDriverWait(driver, 15).until(
+async def get_element_value(driver, primary_selector: str, fallback_selector: str):
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor() as executor:
+        primary_task = loop.run_in_executor(executor, wait_for_primary_element, driver, primary_selector)
+        fallback_task = loop.run_in_executor(executor, wait_for_fallback_element, driver, fallback_selector)
+        
+        done, pending = await asyncio.wait(
+            [primary_task, fallback_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+        
+        for task in pending:
+            task.cancel()
+        
+        for task in done:
+            result = task.result()
+            if result:
+                selector, value = result
+                print(f"Notes from {selector}: {value}")
+                return value
+        
+    return 'empty'
+
+def wait_for_primary_element(driver, selector):
+    try:
+        element = WebDriverWait(driver, 10).until(
             EC.visibility_of_element_located((By.CSS_SELECTOR, selector))
         )
-        notes = element.get_attribute('value') if element else 'empty'
-        print("notes: ", notes)
-        return notes
-    
+        return selector, element.get_attribute('value') if element else 'empty'
+    except TimeoutException:
+        return None
+
+def wait_for_fallback_element(driver, selector):
+    try:
+        element = WebDriverWait(driver, 10).until(
+            EC.visibility_of_element_located((By.CSS_SELECTOR, selector))
+        )
+        return selector, element.text if element else 'empty'
+    except TimeoutException:
+        return None
+
+
     except Exception as e:
-        print(f"An error occurred: -------------------- {e}")
+        print(f"An error occurred: {e}")
         driver.save_screenshot('screenshot_headless.png')
-        traceback.print_exc()
-        return ""
+        return 'empty'
+
     
 async def get_full_info_iplogger(driver, url: str):
     # Run the blocking function in a separate thread
@@ -147,50 +152,40 @@ async def get_full_info_iplogger(driver, url: str):
 def _get_full_info_iplogger(driver, url: str):
     get_custom_page_load_strategy(driver, url)
 
-    notes = get_element_value(driver, 'div.notes input')
+    notes = asyncio.run(get_element_value(driver, 'div.notes input', '.link-info-row:last-child div:last-child'))
 
-    date_time, ip_address = get_iplogger_data(driver)
+    date_time, ip_address, combine_info_iplogger = get_iplogger_data(driver)
     
     # Format date_time and ip_address for better readability
     date_time_str = ', '.join(date_time) if isinstance(date_time, list) else str(date_time)
     ip_address_str = ', '.join(ip_address) if isinstance(ip_address, list) else str(ip_address)
 
-    # Print and return results
     print("Notes:", notes)
     print("Date and Time:", date_time_str)
     print("IP Address:", ip_address_str)
-    return notes, date_time, ip_address
-
-
-    
-    
-    
+    return notes, date_time, ip_address, combine_info_iplogger
 
 
 
-def get_ip_info(date_time, ip_address_details):
+
+
+def get_ip_info(ip_address):
     # Base URL for ipinfo.io API
     random_proxy = random.choice(proxies) 
-    ip_address = ip_address_details[0]
     print('IP address: ', ip_address)
     url = f"https://ipinfo.io/widget/demo/{ip_address}"
 
     try:
-        # Send GET request to ipinfo.io API
         response = requests.get(url, proxies={'http:': random_proxy, 'https:': random_proxy})
-        
         print('Using proxies to get CARRIER: ', random_proxy)
         
+        # Check if the response status code is 400
+        if response.status_code == 400:
+            return response.status_code, "Error: Invalid IP address format. Please enter a valid IP address."
         
-        # Raise an exception if the request was unsuccessful
         response.raise_for_status()
         
-        # Parse the JSON response
         ip_data = response.json()
-        
-        print('data: ', ip_data, type(ip_data))
-        
-        # Extract relevant information
         ip_info = {
             "IP Address": ip_data.get("data", {}).get("ip", "N/A"),
             "City": ip_data.get("data", {}).get("city", "N/A"),
@@ -223,13 +218,7 @@ def get_ip_info(date_time, ip_address_details):
             "Abuse Network": ip_data.get("data", {}).get("abuse", {}).get("network", "N/A"),
         }
 
-        
-        # Get additional data from iplogger
-        # date_time, ip_address_details = get_full_info_iplogger(code)
-
-        # Format the combined information as a single string
         combined_info_string = (
-            f"Logged IP Address: {ip_address_details[0]}\n"
             f"IP Address: {ip_info['IP Address']}\n"
             f"City: {ip_info['City']}\n"
             f"Region: {ip_info['Region']}\n"
@@ -264,17 +253,20 @@ def get_ip_info(date_time, ip_address_details):
             f"Abuse Contact Email: {ip_info['Abuse Contact Email']}\n"
             f"Abuse Contact Phone: {ip_info['Abuse Contact Phone']}\n"
             f"Abuse Network: {ip_info['Abuse Network']}\n"
-            f"Date and Time: {date_time[0]}\n"
         )
 
         
         print('combine string: ', combined_info_string)
-        return combined_info_string
+        return response.status_code, combined_info_string
+    
+    except requests.exceptions.HTTPError as http_err:
+        print(f"HTTP error occurred: {http_err}")
+        return None, 'HTTP Error'
     
     except requests.exceptions.RequestException as e:
         # Handle any errors that occur during the API request
         print(f"Error fetching IP information: {e}")
-        return None
+        return None, 'Error feting IP Infomation'
 
 if __name__ == '__main__':
     driver = Driver(headless=True, uc=True)
